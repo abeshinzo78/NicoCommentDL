@@ -17,6 +17,10 @@
 - **高精度な合成** - [niconicomments](https://github.com/xpadev-net/niconicomments) により、公式プレイヤーにかなり近いコメント描画を再現します。
 - **高速な処理** - ブラウザ上でのストリーミング処理により、長時間動画も効率的に処理しメモリ負担がほとんどないのが特徴です。
 
+## 実際にダウンロードしたもの
+
+https://github.com/user-attachments/assets/ac07223a-1949-4e3e-9f3f-bd6026d50a83
+
 # インストール方法
 
 [releases](https://github.com/abeshinzo78/NicoCommentDL/releases/)から最新版のxpiファイルをダウンロードしてください。
@@ -66,5 +70,8 @@ npm test
 
 以下のプロジェクト・ライブラリのコードを使用、参考にさせていただいています。xpadev-net氏に敬意を表します。
 - [niconicomments](https://github.com/xpadev-net/niconicomments) (MIT License) - コメント描画エンジン
+
+  また右る氏の　[あさやけもゆうやけもないんだ☆](https://www.nicovideo.jp/watch/sm39490089) を説明として使わせていただきました。
+  右る氏に敬意を表します。
 
 
