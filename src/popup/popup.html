@@ -1,0 +1,45 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+  <meta charset="UTF-8">
+  <link rel="stylesheet" href="popup.css">
+</head>
+<body>
+  <div class="container">
+    <h1 class="title">NicoCommentDL</h1>
+
+    <div id="not-nico" class="panel hidden">
+      <p class="message">ニコニコ動画の視聴ページで使用してください。</p>
+    </div>
+
+    <div id="video-info" class="panel hidden">
+      <div class="info-row">
+        <span class="label">動画:</span>
+        <span id="video-title" class="value"></span>
+      </div>
+      <div class="info-row">
+        <span class="label">ID:</span>
+        <span id="video-id" class="value"></span>
+      </div>
+
+      <div class="quality-section">
+        <label class="label">画質:</label>
+        <div id="quality-buttons" class="quality-buttons"></div>
+      </div>
+
+      <button id="download-btn" class="download-btn">
+        コメント付きでダウンロード
+      </button>
+
+      <div id="progress-section" class="progress-section hidden">
+        <div class="progress-bar">
+          <div id="progress-fill" class="progress-fill" style="width: 0%"></div>
+        </div>
+        <p id="progress-text" class="progress-text">待機中</p>
+      </div>
+    </div>
+  </div>
+
+  <script src="popup.js"></script>
+</body>
+</html>

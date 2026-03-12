@@ -1,0 +1,25 @@
+# Node dependencies
+node_modules/
+
+# Build artifacts
+dist/
+dist-chrome/
+web-ext-artifacts/
+
+# Chrome specific (WIP)
+manifest-chrome.json
+
+# Development tools
+CLAUDE.md
+.claude/
+.vscode/
+
+# Testing
+test/
+vitest.config.js
+
+# Notes and Libraries
+lib/
+
+# System files
+.DS_Store

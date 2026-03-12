@@ -1,0 +1,23 @@
+{
+  "name": "nicocommentdl",
+  "version": "1.0.0",
+  "description": "ニコニコ動画のコメント付き動画をダウンロード",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "test": "vitest run",
+    "test:watch": "vitest --watch",
+    "build": "node build.js",
+    "lint": "eslint src/",
+    "dev": "web-ext run --source-dir=dist/"
+  },
+  "devDependencies": {
+    "esbuild": "^0.20.0",
+    "vitest": "^1.2.0",
+    "web-ext": "^9.4.0"
+  },
+  "dependencies": {
+    "@xpadev-net/niconicomments": "^0.2.76",
+    "mp4-muxer": "^5.0.0"
+  }
+}

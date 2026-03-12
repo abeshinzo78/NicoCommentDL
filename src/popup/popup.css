@@ -1,0 +1,151 @@
+* {
+  margin: 0;
+  padding: 0;
+  box-sizing: border-box;
+}
+
+body {
+  width: 340px;
+  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+  font-size: 13px;
+  color: #333;
+  background: #fff;
+}
+
+.container {
+  padding: 12px 16px;
+}
+
+.title {
+  font-size: 16px;
+  font-weight: 700;
+  color: #252525;
+  margin-bottom: 12px;
+  padding-bottom: 8px;
+  border-bottom: 2px solid #0070d8;
+}
+
+.panel {
+  margin-bottom: 8px;
+}
+
+.hidden {
+  display: none !important;
+}
+
+.message {
+  color: #666;
+  text-align: center;
+  padding: 16px 0;
+}
+
+.info-row {
+  display: flex;
+  gap: 8px;
+  margin-bottom: 6px;
+  align-items: flex-start;
+}
+
+.label {
+  font-weight: 600;
+  color: #555;
+  flex-shrink: 0;
+  font-size: 12px;
+}
+
+.value {
+  color: #333;
+  word-break: break-all;
+  font-size: 12px;
+}
+
+.quality-section {
+  margin: 10px 0;
+}
+
+.quality-buttons {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  margin-top: 4px;
+}
+
+.quality-btn {
+  padding: 4px 10px;
+  border: 1px solid #ccc;
+  border-radius: 4px;
+  background: #f5f5f5;
+  cursor: pointer;
+  font-size: 12px;
+  color: #333;
+  transition: all 0.15s;
+}
+
+.quality-btn:hover {
+  background: #e8e8e8;
+  border-color: #999;
+}
+
+.quality-btn.active {
+  background: #0070d8;
+  color: #fff;
+  border-color: #0070d8;
+}
+
+.download-btn {
+  display: block;
+  width: 100%;
+  padding: 10px;
+  margin-top: 12px;
+  background: #0070d8;
+  color: #fff;
+  border: none;
+  border-radius: 6px;
+  font-size: 14px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: background 0.15s;
+}
+
+.download-btn:hover {
+  background: #005bb5;
+}
+
+.download-btn:disabled {
+  background: #999;
+  cursor: not-allowed;
+}
+
+.progress-section {
+  margin-top: 12px;
+}
+
+.progress-bar {
+  width: 100%;
+  height: 8px;
+  background: #e0e0e0;
+  border-radius: 4px;
+  overflow: hidden;
+}
+
+.progress-fill {
+  height: 100%;
+  background: linear-gradient(90deg, #0070d8, #00b4d8);
+  border-radius: 4px;
+  transition: width 0.3s ease;
+}
+
+.progress-text {
+  margin-top: 6px;
+  font-size: 12px;
+  color: #666;
+}
+
+.progress-text.error {
+  color: #d32f2f;
+}
+
+.progress-text.complete {
+  color: #2e7d32;
+  font-weight: 600;
+}
