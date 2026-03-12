@@ -9,7 +9,7 @@
 
 ## 主な機能
 - **コメント付き動画の保存** - 視聴中の動画と流れているコメントを合成して、一つの動画ファイルとしてダウンロードします。
-- **高画質・高精度な合成** - [niconicomments](https://github.com/xpadev-net/niconicomments) により、公式プレイヤーにかなり近いコメント描画を再現します。
+- **高精度な合成** - [niconicomments](https://github.com/xpadev-net/niconicomments) により、公式プレイヤーにかなり近いコメント描画を再現します。
 - **高速な処理** - ブラウザ上でのストリーミング処理により、長時間動画も効率的に処理しメモリ負担がほとんどないのが特徴です。
 
 # インストール方法
@@ -57,7 +57,9 @@ npm test
 ## ライセンス
 このプロジェクトは **MIT License** のもとで公開されています。詳細については [LICENSE](LICENSE) ファイルを参照してください。
 
-また、以下のプロジェクト・ライブラリのコードを使用、参考にさせていただいています。xpadev-net氏に敬意を表します。
+## 謝辞
+
+以下のプロジェクト・ライブラリのコードを使用、参考にさせていただいています。xpadev-net氏に敬意を表します。
 - [niconicomments](https://github.com/xpadev-net/niconicomments) (MIT License) - コメント描画エンジン
 
 
