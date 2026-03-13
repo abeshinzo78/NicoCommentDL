@@ -1,6 +1,6 @@
 {
   "name": "nicocommentdl",
-  "version": "1.0.0",
+  "version": "1.0.1",
   "description": "ニコニコ動画のコメント付き動画をダウンロード",
   "private": true,
   "type": "module",

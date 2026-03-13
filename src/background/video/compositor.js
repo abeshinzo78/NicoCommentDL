@@ -43,6 +43,8 @@ export class Compositor {
   #timestampOffset = 0;
   /** @type {number} */
   #lastVpos = -1;
+  /** @type {number} CFR用フレームレート（デフォルト30fps） */
+  #framerate = 30;
   /**
    * フレーム処理のシリアル化チェーン
    * createImageBitmap は並列実行するが、canvas 書き込み〜encode は必ず 1 フレームずつ順番に行う
@@ -55,6 +57,7 @@ export class Compositor {
    */
   constructor(options) {
     this.#options = options;
+    if (options.framerate) this.#framerate = options.framerate;
     const { width, height } = options;
 
     // 動画フレーム描画用キャンバス（最終出力サイズ）
@@ -183,9 +186,14 @@ export class Compositor {
    */
   async #encodeFrame(videoFrame, bitmapPromise, rawTimestamp, frameDuration) {
     const { width, height } = this.#options;
+    // コメントタイミング用：ソースのタイムスタンプを使う（オフセット補正済み）
     const normalizedTimestamp = rawTimestamp - this.#timestampOffset;
     const currentTimeMs = normalizedTimestamp / 1000; // μs → ms
     const vpos = Math.floor(currentTimeMs / 10); // ms → centiseconds
+
+    // CFR タイムスタンプ：フレーム番号から等間隔で計算（可変フレームレート防止）
+    const cfrIntervalUs = Math.round(1_000_000 / this.#framerate);
+    const cfrTimestamp = this.#frameCount * cfrIntervalUs;
 
     // エンコーダーバックプレッシャー制御（bitmap 変換と並列で走る）
     await this.#waitForEncoder();
@@ -209,10 +217,10 @@ export class Compositor {
       this.#videoCtx.drawImage(this.#commentCanvas, 0, 0);
     }
 
-    // エンコード
+    // エンコード（CFR タイムスタンプと固定 duration を使用）
     const composited = new VideoFrame(this.#videoCanvas, {
-      timestamp: Math.max(0, normalizedTimestamp),
-      duration: frameDuration,
+      timestamp: cfrTimestamp,
+      duration: cfrIntervalUs,
     });
 
     const keyFrame = this.#frameCount % 120 === 0;

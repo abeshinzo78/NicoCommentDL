@@ -10,6 +10,56 @@ import { sanitizeFilename } from '../shared/utils.js';
 /** @type {import('../shared/messages.js').ProgressInfo | null} */
 let currentProgress = null;
 
+/**
+ * AVCC形式のサンプルデータからSPS/PPSを抽出する
+ * @param {Uint8Array} data
+ * @returns {{ sps: Uint8Array | null, pps: Uint8Array | null }}
+ */
+function extractSPSPPS(data) {
+  let offset = 0;
+  let sps = null;
+  let pps = null;
+  while (offset + 4 <= data.length) {
+    const naluLen = (data[offset] << 24 | data[offset+1] << 16 | data[offset+2] << 8 | data[offset+3]) >>> 0;
+    if (naluLen === 0 || offset + 4 + naluLen > data.length) break;
+    const naluType = data[offset + 4] & 0x1f;
+    if (naluType === 7) sps = data.slice(offset + 4, offset + 4 + naluLen);
+    if (naluType === 8) pps = data.slice(offset + 4, offset + 4 + naluLen);
+    offset += 4 + naluLen;
+  }
+  return { sps, pps };
+}
+
+/**
+ * SPS/PPSから正しいAVCDecoderConfigurationRecordを構築する
+ * Firefox WebCodecsがdecoderConfig.descriptionに余分なバイトを付けるバグを回避
+ * @param {Uint8Array} sps - NALユニットヘッダを含むSPSデータ
+ * @param {Uint8Array} pps - NALユニットヘッダを含むPPSデータ
+ * @returns {ArrayBuffer}
+ */
+function buildAVCDescription(sps, pps) {
+  // SPS: [0x67(NAL header)][profile_idc][profile_compat][level_idc][...]
+  const profileIdc   = sps[1];
+  const profileCompat = sps[2];
+  const levelIdc     = sps[3];
+  const out = new Uint8Array(7 + 2 + sps.length + 1 + 2 + pps.length);
+  let i = 0;
+  out[i++] = 0x01;                     // configurationVersion
+  out[i++] = profileIdc;               // AVCProfileIndication
+  out[i++] = profileCompat;            // profile_compatibility
+  out[i++] = levelIdc;                 // AVCLevelIndication
+  out[i++] = 0xff;                     // reserved(6) | lengthSizeMinusOne(3) = 4byte長
+  out[i++] = 0xe1;                     // reserved(3) | numSPS = 1
+  out[i++] = (sps.length >> 8) & 0xff;
+  out[i++] = sps.length & 0xff;
+  out.set(sps, i); i += sps.length;
+  out[i++] = 0x01;                     // numPPS = 1
+  out[i++] = (pps.length >> 8) & 0xff;
+  out[i++] = pps.length & 0xff;
+  out.set(pps, i);
+  return out.buffer;
+}
+
 /** @type {Map<number, any>} */
 const tabData = new Map();
 
@@ -203,9 +253,14 @@ async function startDownload(watchData, preferredQuality, tabId) {
       : width >= 640 ? 1_200_000
       : 800_000;
 
+    // フレームレート取得（master playlist の FRAME-RATE 属性 → なければ 30fps）
+    const framerate = selectedVariant.frameRate || 30;
+    console.log(`[main] Target framerate: ${framerate}fps (CFR)`);
+
     const compositor = new Compositor({
       width,
       height,
+      framerate,
       bitrate: autoBitrate,
       onEncodedChunk: (chunk, meta) => {
         let timestamp = chunk.timestamp;
@@ -216,6 +271,16 @@ async function startDownload(watchData, preferredQuality, tabId) {
 
         const dataBuffer = new Uint8Array(chunk.byteLength);
         chunk.copyTo(dataBuffer);
+
+        // Firefox WebCodecsのバグ：decoderConfig.descriptionのSPS/PPSに余分なバイトが付く。
+        // 実際のサンプルデータは正しいので、そこからSPS/PPSを抽出して正しいdescriptionを再構築する。
+        if (meta?.decoderConfig?.description && chunk.type === 'key') {
+          const { sps, pps } = extractSPSPPS(dataBuffer);
+          if (sps && pps && sps.length >= 4) {
+            const correctDescription = buildAVCDescription(sps, pps);
+            meta = { ...meta, decoderConfig: { ...meta.decoderConfig, description: correctDescription } };
+          }
+        }
 
         muxer.addVideoChunk(new EncodedVideoChunk({
           // @ts-ignore

@@ -19,6 +19,7 @@ const MAX_CONCURRENCY = 64;
  * @property {string} [resolution]
  * @property {string} [codecs]
  * @property {string} [audio]
+ * @property {number} [frameRate]
  */
 
 /**
@@ -63,6 +64,7 @@ export function parseMasterM3u8(text, baseUrl) {
         resolution: attrs.RESOLUTION || '',
         codecs: attrs.CODECS || '',
         audio: attrs.AUDIO || '',
+        frameRate: attrs['FRAME-RATE'] ? parseFloat(attrs['FRAME-RATE']) : undefined,
       });
     }
   }
