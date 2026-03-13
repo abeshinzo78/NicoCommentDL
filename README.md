@@ -24,8 +24,8 @@ https://github.com/user-attachments/assets/ac07223a-1949-4e3e-9f3f-bd6026d50a83
 
 [Releases](https://github.com/abeshinzo78/NicoCommentDL/releases/)から最新版のファイルをダウンロードしてください。
 
-- **Firefox**: `NicoComment-バージョン名.xpi` ファイルをReleasesから選んでインストールしてください。
-- **Chrome**: `NicoComment-バージョン名.zip` を解凍してから「パッケージ化されていない拡張機能を読み込む」で回答したファイルを読み込むとインストールできます。
+- **Firefox**: `NicoCommentDL-バージョン名.xpi` ファイルをReleasesから選んでインストールしてください。
+- **Chrome**: `NicoCommentDL-バージョン名.zip` を解凍してから「パッケージ化されていない拡張機能を読み込む」で回答したファイルを読み込むとインストールできます。
 
 ## 開発版のインストール方法
 
@@ -66,6 +66,74 @@ npm run build
 1. ニコニコ動画の各動画ページを開きます。
 2. 拡張機能のアイコンをクリックしてポップアップを開きます。
 3. 合成・ダウンロードを開始します。
+
+# 仕様
+
+### 共通仕様
+
+| 項目 | 内容 |
+|---|---|
+| 対応サイト | `nicovideo.jp/watch/*` |
+| 出力フォーマット | MP4（H.264 + AAC） |
+| コメント描画 | [niconicomments](https://github.com/xpadev-net/niconicomments) による公式互換描画 |
+| フレームレート | 動画に合わせた固定フレームレート（CFR）出力 |
+| アクセス権 | nicovideo.jp / nvapi.nicovideo.jp / nvcomment / domand 各ドメイン |
+
+---
+
+### Firefox 版
+
+| 項目 | 内容 |
+|---|---|
+| Manifest | Version 2 (MV2) |
+| 動作確認バージョン | Firefox 140.0 以上 |
+| バックグラウンド | Event Page（非永続） |
+| 映像処理 | WebCodecs API（バックグラウンドページ内） |
+
+**パーミッション**
+
+```
+activeTab, downloads, storage
+*://*.nicovideo.jp/*
+*://nvapi.nicovideo.jp/*
+*://public.nvcomment.nicovideo.jp/*
+*://delivery.domand.nicovideo.jp/*
+*://asset.domand.nicovideo.jp/*
+```
+
+---
+
+### Chrome 版
+
+| 項目 | 内容 |
+|---|---|
+| Manifest | Version 3 (MV3) |
+| 動作確認バージョン | Chrome 116 以上 |
+| バックグラウンド | Service Worker |
+| 映像処理 | WebCodecs API（Offscreen Document 内で実行） |
+
+**パーミッション**
+
+```
+activeTab, downloads, storage, alarms, offscreen, tabs
+host_permissions:
+  *://*.nicovideo.jp/*
+  *://nvapi.nicovideo.jp/*
+  *://public.nvcomment.nicovideo.jp/*
+  *://delivery.domand.nicovideo.jp/*
+  *://asset.domand.nicovideo.jp/*
+```
+
+**MV3 アーキテクチャ**
+
+Chrome MV3 では Service Worker に寿命制限・DOM API 制限があるため、3つのコンテキストで役割を分担しています：
+
+| コンテキスト | 役割 |
+|---|---|
+| **Service Worker** | メッセージルーティング・`chrome.downloads` 呼び出し・タブ管理・SW keepalive |
+| **Offscreen Document** | VideoDecoder / VideoEncoder（WebCodecs）・Canvas2D によるコメント合成・MP4 生成 |
+| **Content Script** | Cookie 付きクロスオリジンフェッチの代理実行・ページからの視聴データ抽出 |
+
 
 ## 開発
 改造大歓迎です！自由にフォークして自分好みの機能を追加してください。
