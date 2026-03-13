@@ -24,8 +24,8 @@ https://github.com/user-attachments/assets/ac07223a-1949-4e3e-9f3f-bd6026d50a83
 
 [Releases](https://github.com/abeshinzo78/NicoCommentDL/releases/)から最新版のファイルをダウンロードしてください。
 
-- **Firefox**: `NicoCommentDL-バージョン名.xpi` ファイルをReleasesから選んでインストールしてください。
-- **Chrome**: `NicoCommentDL-バージョン名.zip` を解凍してから「パッケージ化されていない拡張機能を読み込む」で回答したファイルを読み込むとインストールできます。
+- **Firefox**: `NicoCommentDL-Firefox-バージョン名.xpi` ファイルをReleasesから選んでインストールしてください。
+- **Chrome**: `NicoCommentDL-Chrome-バージョン名.zip` を解凍してから「パッケージ化されていない拡張機能を読み込む」で回答したファイルを読み込むとインストールできます。
 
 ## 開発版のインストール方法
 
