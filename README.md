@@ -71,7 +71,7 @@ npm test
 以下のプロジェクト・ライブラリのコードを使用、参考にさせていただいています。xpadev-net氏に敬意を表します。
 - [niconicomments](https://github.com/xpadev-net/niconicomments) (MIT License) - コメント描画エンジン
 
-  また右る氏の　[あさやけもゆうやけもないんだ☆](https://www.nicovideo.jp/watch/sm39490089) を説明として使わせていただきました。
-  右る氏に敬意を表します。
+また右る氏の　[あさやけもゆうやけもないんだ☆](https://www.nicovideo.jp/watch/sm39490089) を説明として使わせていただきました。
+右る氏に敬意を表します。
 
 
