@@ -83,11 +83,43 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
           return;
         }
         await ensureOffscreenDocument();
-        chrome.runtime.sendMessage({
-          type: 'OFFSCREEN_START_DOWNLOAD',
-          data: { watchData, preferredQuality, tabId },
-        }).catch(() => {});
+        // offscreen document の JS が読み込まれてリスナーが登録されるまで待機
+        // chrome.offscreen.createDocument() はドキュメント作成完了を待つが
+        // スクリプト実行完了は保証しないため、リトライ付きで送信する
+        let sent = false;
+        for (let attempt = 0; attempt < 10; attempt++) {
+          try {
+            await chrome.runtime.sendMessage({
+              type: 'OFFSCREEN_START_DOWNLOAD',
+              data: { watchData, preferredQuality, tabId },
+            });
+            sent = true;
+            break;
+          } catch (_) {
+            // offscreen がまだ準備できていない場合は少し待ってリトライ
+            await new Promise(r => setTimeout(r, 150));
+          }
+        }
+        if (!sent) {
+          console.error('[sw-chrome] Failed to send OFFSCREEN_START_DOWNLOAD after 10 attempts');
+        }
       })();
+      sendResponse({ ok: true });
+      return false;
+    }
+
+    case 'PROXY_FETCH': {
+      // offscreen document は chrome.tabs にアクセスできないため SW が中継する
+      const { tabId, url, init } = message;
+      chrome.tabs.sendMessage(tabId, { type: 'PROXY_FETCH', url, init })
+        .then(result => sendResponse(result))
+        .catch(err => sendResponse({ ok: false, status: 0, error: err.message }));
+      return true; // 非同期 sendResponse
+    }
+
+    case 'TRIGGER_DOWNLOAD': {
+      const { url, filename } = message;
+      chrome.downloads.download({ url, filename, saveAs: true });
       sendResponse({ ok: true });
       return false;
     }

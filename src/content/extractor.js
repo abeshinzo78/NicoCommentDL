@@ -30,24 +30,50 @@
     for (const meta of metaElems) {
       const content = meta.getAttribute('content');
       if (!content) continue;
-      try {
-        const parsed = JSON.parse(content);
-        // 新形式: { meta: { status: 200 }, data: { response: { ... } } }
-        if (parsed?.data?.response) {
-          return parsed.data.response;
+      let parsed = null;
+      try { parsed = JSON.parse(content); } catch (_) {}
+      // URL エンコードされている場合
+      if (!parsed) {
+        try { parsed = JSON.parse(decodeURIComponent(content)); } catch (_) {}
+      }
+      if (!parsed) continue;
+      // media.domand が含まれているパスを優先して探す
+      const candidates = [
+        parsed?.data?.response,
+        parsed?.data,
+        parsed?.response,
+        parsed,
+      ];
+      for (const c of candidates) {
+        if (c?.media?.domand) {
+          console.log('[NicoCommentDL] Watch data found via meta[server-response]');
+          return c;
         }
-      } catch (e) {
-        // このmetaタグはwatch用でない可能性がある、次を試す
+      }
+    }
+
+    // 方法3: ページ内 <script> タグの JSON データを探す
+    for (const script of document.querySelectorAll('script')) {
+      const text = script.textContent || '';
+      if (!text.includes('accessRightKey') && !text.includes('domand')) continue;
+      const match = text.match(/\bwindow\.__INITIAL_WATCH_DATA__\s*=\s*({.+?});/s)
+        || text.match(/\bwindow\.__STORE__\s*=\s*({.+?});/s);
+      if (match) {
+        try {
+          const obj = JSON.parse(match[1]);
+          if (obj?.media?.domand) return obj;
+          if (obj?.data?.response?.media?.domand) return obj.data.response;
+        } catch (_) {}
       }
     }
 
     return null;
   }
 
-  function extractWatchData() {
+  function extractWatchData(silent = false) {
     const apiData = extractApiData();
     if (!apiData) {
-      console.warn('[NicoCommentDL] Could not extract watch data from page');
+      if (!silent) console.warn('[NicoCommentDL] Could not extract watch data from page');
       return null;
     }
 
@@ -102,13 +128,18 @@
   });
 
   // ページ読み込み完了時にbackgroundに通知
-  const data = extractWatchData();
-  if (data) {
-    browser.runtime.sendMessage({
-      type: 'WATCH_DATA_READY',
-      data,
-    }).catch(() => {
-      // popup未オープン時はエラーになるが無視
-    });
-  }
+  // ニコニコ動画はSPAのため、document_idle 後でもJSハイドレーションが完了していない場合がある
+  // 指数バックオフ付きで最大6回リトライする（500ms → 1s → 2s → 3s → 3s → 3s）
+  (async function tryExtract() {
+    const delays = [0, 500, 1000, 2000, 3000, 3000];
+    for (let i = 0; i < delays.length; i++) {
+      if (delays[i] > 0) await new Promise(r => setTimeout(r, delays[i]));
+      const data = extractWatchData(true); // 自動リトライ中は警告を抑制
+      if (data) {
+        browser.runtime.sendMessage({ type: 'WATCH_DATA_READY', data }).catch(() => {});
+        return;
+      }
+    }
+    console.warn('[NicoCommentDL] Watch data not found after retries');
+  })();
 })();

@@ -8,9 +8,8 @@
 [![Ask DeepWiki](https://deepwiki.com/badge.svg)](https://deepwiki.com/abeshinzo78/nicocommentDL)
 
 
-> [!IMPORTANT]
-> **現在は Firefox 版のみを公開しています。**  
-> Chrome 版は現在開発中です。
+> [!NOTE]
+> **Firefox 版・Chrome 版の両方に対応しています。**
 
 ## 主な機能
 - **コメント付き動画の保存** - 視聴中の動画と流れているコメントを合成して、一つの動画ファイルとしてダウンロードします。
@@ -23,7 +22,10 @@ https://github.com/user-attachments/assets/ac07223a-1949-4e3e-9f3f-bd6026d50a83
 
 # インストール方法
 
-[releases](https://github.com/abeshinzo78/NicoCommentDL/releases/)から最新版のxpiファイルをダウンロードしてください。
+[Releases](https://github.com/abeshinzo78/NicoCommentDL/releases/)から最新版のファイルをダウンロードしてください。
+
+- **Firefox**: `.xpi` ファイルをReleasesから選んでインストールしてください。
+- **Chrome**: `dist-chrome.zip` を解凍してから「パッケージ化されていない拡張機能を読み込む」で回答したファイルを読み込むとインストールできます。
 
 ## 開発版のインストール方法
 
@@ -45,10 +47,20 @@ npm install
 npm run build
 ```
 
-### 4. ブラウザに読み込む (Firefox)
-1. Firefox のアドレスバーに `about:debugging#/runtime/this-firefox` を入力します。
+ビルド後、`dist/`（Firefox用）と `dist-chrome/`（Chrome用）が生成されます。
+
+### 4. ブラウザに読み込む
+
+#### Firefox
+1. アドレスバーに `about:debugging#/runtime/this-firefox` を入力します。
 2. 「一時的な拡張機能を読み込む...」をクリックします。
-3. プロジェクトフォルダ内の `manifest.json` を選択します。
+3. `dist/manifest.json` を選択します。
+
+#### Chrome / Edge
+1. アドレスバーに `chrome://extensions` を入力します。
+2. 右上の「デベロッパーモード」をオンにします。
+3. 「パッケージ化されていない拡張機能を読み込む」をクリックします。
+4. `dist-chrome/` フォルダを選択します。
 
 # 使い方
 1. ニコニコ動画の各動画ページを開きます。

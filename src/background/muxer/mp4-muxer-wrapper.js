@@ -24,6 +24,7 @@ async function loadMuxer() {
  * @property {number} videoWidth
  * @property {number} videoHeight
  * @property {'avc' | 'vp9'} videoCodec
+ * @property {number} [videoFrameRate] CFR 出力用フレームレート（正の整数）。指定するとタイムスケールがこの値になり完全CFRになる
  * @property {number} [audioSampleRate]
  * @property {number} [audioChannels]
  * @property {Uint8Array} [audioDescription]
@@ -39,13 +40,20 @@ export async function createMuxer(options) {
 
   const target = new ArrayBufferTarget();
 
+  const videoConfig = {
+    codec: options.videoCodec,
+    width: options.videoWidth,
+    height: options.videoHeight,
+  };
+  // frameRate を渡すとタイムスケールが frameRate になり、フレームデルタが常に 1 tick → 完全 CFR
+  if (options.videoFrameRate && Number.isInteger(options.videoFrameRate) && options.videoFrameRate > 0) {
+    // @ts-ignore
+    videoConfig.frameRate = options.videoFrameRate;
+  }
+
   const muxerConfig = {
     target,
-    video: {
-      codec: options.videoCodec,
-      width: options.videoWidth,
-      height: options.videoHeight,
-    },
+    video: videoConfig,
     fastStart: 'in-memory',
   };
 
