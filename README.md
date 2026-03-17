@@ -136,8 +136,15 @@ Chrome MV3 では Service Worker に寿命制限・DOM API 制限があるため
 | **Offscreen Document** | VideoDecoder / VideoEncoder（WebCodecs）・Canvas2D によるコメント合成・MP4 生成 |
 | **Content Script** | Cookie 付きクロスオリジンフェッチの代理実行・ページからの視聴データ抽出 |
 
+---
 
+
+## 改良点
+
+- メモリを使わずにダウンロード速度を早くする方法を実用化させる。
+  
 ## 開発
+
 改造大歓迎です！自由にフォークして自分好みの機能を追加してください。
 
 ### テストの実行
