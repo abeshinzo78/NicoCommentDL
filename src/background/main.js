@@ -191,7 +191,6 @@ async function startDownload(watchData, preferredQuality, tabId) {
     const videoCodec = h264Supported ? 'avc' : 'vp9';
 
     const resolution = parseResolution(selectedVariant.resolution);
-    let lastVideoTimestamp = -1;
     let lastAudioTimestamp = -1;
     /** @type {number | null} */
     let globalStartTimestamp = null;
@@ -237,10 +236,15 @@ async function startDownload(watchData, preferredQuality, tabId) {
       })() : Promise.resolve(),
     ]);
 
+    // フレームレート取得（master playlist の FRAME-RATE 属性 → なければ 30fps）
+    const framerate = selectedVariant.frameRate || 30;
+    console.log(`[main] Target framerate: ${framerate}fps (CFR)`);
+
     const { muxer, target } = await createMuxer({
       videoWidth: width,
       videoHeight: height,
       videoCodec,
+      videoFrameRate: Math.round(framerate),
       audioSampleRate,
       audioChannels,
       audioDescription,
@@ -253,9 +257,10 @@ async function startDownload(watchData, preferredQuality, tabId) {
       : width >= 640 ? 1_200_000
       : 800_000;
 
-    // フレームレート取得（master playlist の FRAME-RATE 属性 → なければ 30fps）
-    const framerate = selectedVariant.frameRate || 30;
-    console.log(`[main] Target framerate: ${framerate}fps (CFR)`);
+    // CFR 用フレームカウンタ：エンコーダ出力の timestamp/duration を無視し、
+    // フレーム番号から均一なタイミングを算出して muxer に渡す
+    let videoFrameIdx = 0;
+    const cfrDurationUs = Math.round(1_000_000 / framerate);
 
     const compositor = new Compositor({
       width,
@@ -263,11 +268,9 @@ async function startDownload(watchData, preferredQuality, tabId) {
       framerate,
       bitrate: autoBitrate,
       onEncodedChunk: (chunk, meta) => {
-        let timestamp = chunk.timestamp;
-        if (timestamp <= lastVideoTimestamp) {
-          timestamp = lastVideoTimestamp + 1;
-        }
-        lastVideoTimestamp = timestamp;
+        // CFR タイムスタンプ：フレーム番号 × 固定間隔（エンコーダ出力を無視）
+        const timestamp = videoFrameIdx * cfrDurationUs;
+        videoFrameIdx++;
 
         const dataBuffer = new Uint8Array(chunk.byteLength);
         chunk.copyTo(dataBuffer);
@@ -285,8 +288,8 @@ async function startDownload(watchData, preferredQuality, tabId) {
         muxer.addVideoChunk(new EncodedVideoChunk({
           // @ts-ignore
           type: chunk.type,
-          timestamp: timestamp,
-          duration: chunk.duration || 0,
+          timestamp,
+          duration: cfrDurationUs,
           data: dataBuffer
         }), meta);
       },
@@ -308,8 +311,9 @@ async function startDownload(watchData, preferredQuality, tabId) {
 
     await compositor.init();
 
-    // 6. 動画セグメントをストリーミング処理（prefetch 4、全量一括 DL しない）
-    //    同時に保持するセグメントは最大 4 本分のみ → メモリを大幅に節約
+    // 6. 動画 + 音声をストリーミング処理
+    //    動画: prefetch 6、全量一括 DL しない（メモリ節約）
+    //    音声: 動画エンコードと並列にダウンロード・muxer 投入（時間短縮）
 
     /** @type {Promise<void>[]} */
     const framePromises = [];
@@ -320,11 +324,21 @@ async function startDownload(watchData, preferredQuality, tabId) {
     let resolveFrameSlot = null;
     const MAX_PENDING_FRAMES = 8;
 
+    // globalStartTimestamp が確定したら resolve する Promise（音声処理の開始トリガー）
+    /** @type {(() => void) | null} */
+    let resolveTimestampReady = null;
+    const timestampReadyPromise = new Promise(r => { resolveTimestampReady = r; });
+
     const videoDecoder = new VideoDecoder({
       output: (frame) => {
         if (globalStartTimestamp === null) {
           globalStartTimestamp = frame.timestamp;
           compositor.setTimestampOffset(globalStartTimestamp);
+          // 音声処理を開始させる
+          if (resolveTimestampReady) {
+            resolveTimestampReady();
+            resolveTimestampReady = null;
+          }
         }
         pendingFrameCount++;
         const p = compositor.processFrame(frame).finally(() => {
@@ -347,6 +361,41 @@ async function startDownload(watchData, preferredQuality, tabId) {
     videoDecoder.configure(decoderConfig);
     console.log('[main] VideoDecoder configured:', decoderConfig.codec);
 
+    // 音声処理を並列起動（globalStartTimestamp 確定後に muxer 投入開始）
+    const audioPromise = (audioPlaylist) ? (async () => {
+      // 動画の最初のフレームでタイムスタンプ基準が決まるのを待つ
+      await timestampReadyPromise;
+
+      await forEachSegment(
+        audioPlaylist.initSegmentUrl,
+        audioPlaylist.segments,
+        async (data, segIndex) => {
+          if (segIndex === 0) return;
+
+          const audioChunks = extractVideoChunks(data, { timescale: audioTimescale });
+          for (const chunk of audioChunks) {
+            if (!chunk.data || chunk.data.byteLength === 0) continue;
+
+            let normalizedTimestamp = chunk.timestamp - globalStartTimestamp;
+
+            if (normalizedTimestamp <= lastAudioTimestamp) {
+              normalizedTimestamp = lastAudioTimestamp + 1;
+            }
+            lastAudioTimestamp = normalizedTimestamp;
+
+            muxer.addAudioChunk(new EncodedAudioChunk({
+              type: 'key',
+              timestamp: Math.max(0, normalizedTimestamp),
+              duration: chunk.duration || 0,
+              data: chunk.data,
+            }));
+          }
+        },
+        { initData: audioInitData, concurrency: 6 },
+      );
+    })() : Promise.resolve();
+
+    // 動画セグメントをストリーミング処理
     await forEachSegment(
       videoPlaylist.initSegmentUrl,
       videoPlaylist.segments,
@@ -366,7 +415,7 @@ async function startDownload(watchData, preferredQuality, tabId) {
           if (!chunk.data || chunk.data.byteLength === 0) continue;
 
           // デコーダーキューが溜まっていたら待機
-          while (videoDecoder.decodeQueueSize > 8) {
+          while (videoDecoder.decodeQueueSize > 16) {
             await new Promise(resolve => videoDecoder.addEventListener('dequeue', resolve, { once: true }));
           }
           // コンポジターの未処理フレームが多すぎたら待機（メモリ抑制）
@@ -383,7 +432,7 @@ async function startDownload(watchData, preferredQuality, tabId) {
         }
         // data はここでスコープを抜けて GC 対象になる
       },
-      { initData: videoInitData, concurrency: 4 },
+      { initData: videoInitData, concurrency: 6 },
     );
 
     await videoDecoder.flush();
@@ -391,48 +440,8 @@ async function startDownload(watchData, preferredQuality, tabId) {
     await Promise.all(framePromises);
     await compositor.flush();
 
-    // 7. 音声セグメントをストリーミング処理
-    if (audioPlaylist) {
-      updateProgress({
-        stage: 'muxing',
-        message: '音声を結合中...',
-        current: 0,
-        total: audioPlaylist.segments.length,
-        percent: 90,
-      });
-
-      await forEachSegment(
-        audioPlaylist.initSegmentUrl,
-        audioPlaylist.segments,
-        async (data, segIndex) => {
-          if (segIndex === 0) return;
-
-          const audioChunks = extractVideoChunks(data, { timescale: audioTimescale });
-          for (const chunk of audioChunks) {
-            if (!chunk.data || chunk.data.byteLength === 0) continue;
-
-            if (globalStartTimestamp === null) {
-              globalStartTimestamp = chunk.timestamp;
-            }
-            let normalizedTimestamp = chunk.timestamp - globalStartTimestamp;
-
-            if (normalizedTimestamp <= lastAudioTimestamp) {
-              normalizedTimestamp = lastAudioTimestamp + 1;
-            }
-            lastAudioTimestamp = normalizedTimestamp;
-
-            muxer.addAudioChunk(new EncodedAudioChunk({
-              type: 'key',
-              timestamp: Math.max(0, normalizedTimestamp),
-              duration: chunk.duration || 0,
-              data: chunk.data,
-            }));
-          }
-          // data はここで GC 対象になる
-        },
-        { initData: audioInitData, concurrency: 4 },
-      );
-    }
+    // 音声処理の完了を待つ（動画と並列で進行済み）
+    await audioPromise;
 
     // MP4 ファイナライズ
     updateProgress({

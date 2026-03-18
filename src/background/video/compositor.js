@@ -16,6 +16,9 @@ import {
  * @property {(progress: number, total: number) => void} [onProgress]
  */
 
+/** コメント表示の最大持続時間（5秒 = スクロール4.1s / 固定3s を余裕をもってカバー） */
+const COMMENT_DISPLAY_DURATION_MS = 5000;
+
 /**
  * コメント合成パイプライン
  * niconicomments ライブラリを使用してニコニコ公式準拠のコメント描画を行う
@@ -35,6 +38,10 @@ export class Compositor {
   #encoder = null;
   /** @type {CompositorOptions} */
   #options;
+  /** @type {number} キャッシュ済み出力幅 */
+  #width;
+  /** @type {number} キャッシュ済み出力高さ */
+  #height;
   /** @type {number} */
   #frameCount = 0;
   /** @type {number} */
@@ -45,6 +52,15 @@ export class Compositor {
   #lastVpos = -1;
   /** @type {number} CFR用フレームレート（デフォルト30fps） */
   #framerate = 30;
+  /** @type {number} CFRフレーム間隔（μs）、init時に確定 */
+  #cfrIntervalUs = Math.round(1_000_000 / 30);
+  /**
+   * コメント表示区間のビットマップ（秒単位）
+   * commentActiveSeconds[s] === 1 なら、その秒にコメントが表示されている
+   * null の場合はタイムライン未構築 → 常にコメント描画を行う（安全側フォールバック）
+   * @type {Uint8Array | null}
+   */
+  #commentActiveSeconds = null;
   /**
    * フレーム処理のシリアル化チェーン
    * createImageBitmap は並列実行するが、canvas 書き込み〜encode は必ず 1 フレームずつ順番に行う
@@ -57,8 +73,13 @@ export class Compositor {
    */
   constructor(options) {
     this.#options = options;
-    if (options.framerate) this.#framerate = options.framerate;
+    if (options.framerate) {
+      this.#framerate = options.framerate;
+      this.#cfrIntervalUs = Math.round(1_000_000 / options.framerate);
+    }
     const { width, height } = options;
+    this.#width = width;
+    this.#height = height;
 
     // 動画フレーム描画用キャンバス（最終出力サイズ）
     this.#videoCanvas = new OffscreenCanvas(width, height);
@@ -96,6 +117,10 @@ export class Compositor {
       }
     }
 
+    // コメント表示タイムラインを構築（秒単位ビットマップ）
+    // drawCanvas + drawImage の完全スキップ判定に使用
+    this.#buildCommentTimeline(threads);
+
     this.#niconiComments = new NiconiComments(
       this.#commentRenderer,
       threads,
@@ -103,6 +128,51 @@ export class Compositor {
     );
 
     console.log(`[Compositor] NiconiComments initialized with ${threads.reduce((sum, t) => sum + (t.comments?.length || 0), 0)} comments`);
+  }
+
+  /**
+   * コメントの表示タイムラインをビットマップとして構築
+   * commentActiveSeconds[second] = 1 であれば、その秒にコメントが画面上に存在する
+   * @param {any[]} threads
+   */
+  #buildCommentTimeline(threads) {
+    let maxSecond = 0;
+    let commentCount = 0;
+
+    for (const thread of threads) {
+      for (const comment of (thread.comments || [])) {
+        const vposMs = comment.vposMs;
+        if (vposMs === undefined || vposMs < 0) continue;
+        const endMs = vposMs + COMMENT_DISPLAY_DURATION_MS;
+        const endSecond = Math.ceil(endMs / 1000);
+        if (endSecond > maxSecond) maxSecond = endSecond;
+        commentCount++;
+      }
+    }
+
+    if (commentCount === 0 || maxSecond === 0) return;
+
+    const timeline = new Uint8Array(maxSecond + 1);
+    for (const thread of threads) {
+      for (const comment of (thread.comments || [])) {
+        const vposMs = comment.vposMs;
+        if (vposMs === undefined || vposMs < 0) continue;
+        const startSec = Math.max(0, Math.floor(vposMs / 1000));
+        const endSec = Math.min(maxSecond, Math.ceil((vposMs + COMMENT_DISPLAY_DURATION_MS) / 1000));
+        for (let s = startSec; s <= endSec; s++) {
+          timeline[s] = 1;
+        }
+      }
+    }
+
+    this.#commentActiveSeconds = timeline;
+
+    // 統計ログ
+    let activeSecs = 0;
+    for (let i = 0; i < timeline.length; i++) {
+      if (timeline[i]) activeSecs++;
+    }
+    console.log(`[Compositor] Comment timeline: ${activeSecs}/${timeline.length}s active (${Math.round(activeSecs / timeline.length * 100)}%)`);
   }
 
   /**
@@ -135,7 +205,7 @@ export class Compositor {
    */
   async #waitForEncoder() {
     if (!this.#encoder) return;
-    while (this.#encoder.encodeQueueSize > 10) {
+    while (this.#encoder.encodeQueueSize > 15) {
       await new Promise(resolve => {
         this.#encoder.addEventListener('dequeue', resolve, { once: true });
       });
@@ -147,6 +217,20 @@ export class Compositor {
    */
   setTimestampOffset(offset) {
     this.#timestampOffset = offset;
+  }
+
+  /**
+   * 指定 vpos にコメントが表示されているか判定
+   * タイムライン未構築時は true を返す（安全側: 常に描画）
+   * @param {number} vpos - centiseconds
+   * @returns {boolean}
+   */
+  #hasCommentsAt(vpos) {
+    if (!this.#niconiComments) return false;
+    const tl = this.#commentActiveSeconds;
+    if (!tl) return true; // タイムライン未構築 → 安全側で常に描画
+    const sec = Math.floor(vpos / 100);
+    return sec >= 0 && sec < tl.length && tl[sec] === 1;
   }
 
   /**
@@ -167,14 +251,13 @@ export class Compositor {
     const bitmapPromise = createImageBitmap(videoFrame);
     // videoFrame のタイムスタンプは close() 前に取り出しておく
     const rawTimestamp = videoFrame.timestamp;
-    const frameDuration = videoFrame.duration || undefined;
 
     // 前フレームの canvas 書き込み〜encode が終わってから実行
     const p = this.#processingChain.then(() =>
-      this.#encodeFrame(videoFrame, bitmapPromise, rawTimestamp, frameDuration)
+      this.#encodeFrame(videoFrame, bitmapPromise, rawTimestamp)
     );
     // エラーでチェーンが止まらないようにする
-    this.#processingChain = p.then(() => {}, () => {});
+    this.#processingChain = p.catch(() => {});
     return p;
   }
 
@@ -182,45 +265,43 @@ export class Compositor {
    * @param {VideoFrame} videoFrame
    * @param {Promise<ImageBitmap>} bitmapPromise
    * @param {number} rawTimestamp
-   * @param {number | undefined} frameDuration
    */
-  async #encodeFrame(videoFrame, bitmapPromise, rawTimestamp, frameDuration) {
-    const { width, height } = this.#options;
+  async #encodeFrame(videoFrame, bitmapPromise, rawTimestamp) {
     // コメントタイミング用：ソースのタイムスタンプを使う（オフセット補正済み）
-    const normalizedTimestamp = rawTimestamp - this.#timestampOffset;
-    const currentTimeMs = normalizedTimestamp / 1000; // μs → ms
-    const vpos = Math.floor(currentTimeMs / 10); // ms → centiseconds
+    const vpos = Math.floor((rawTimestamp - this.#timestampOffset) / 10000); // μs → centiseconds
 
-    // CFR タイムスタンプ：フレーム番号から等間隔で計算（可変フレームレート防止）
-    const cfrIntervalUs = Math.round(1_000_000 / this.#framerate);
-    const cfrTimestamp = this.#frameCount * cfrIntervalUs;
+    // コメント表示判定：タイムラインで不在区間なら drawCanvas + drawImage を完全スキップ
+    const hasComments = this.#hasCommentsAt(vpos);
 
-    // エンコーダーバックプレッシャー制御（bitmap 変換と並列で走る）
-    await this.#waitForEncoder();
-
-    // 変換済み ImageBitmap を受け取り（通常はすでに完了済み）
-    const bitmap = await bitmapPromise;
-    videoFrame.close();
-
-    // 動画フレームを描画
-    this.#videoCtx.drawImage(bitmap, 0, 0, width, height);
-    bitmap.close();
-
-    // コメントを描画（vpos 変化時のみ再描画）
-    if (this.#niconiComments && vpos !== this.#lastVpos) {
+    // ★ コメント描画を await 前に実行：drawCanvas がメインスレッドをブロックしている間に
+    //   createImageBitmap がブラウザスレッドで並列完了する（bitmap 待ち時間を隠蔽）
+    if (hasComments && vpos !== this.#lastVpos) {
       this.#niconiComments.drawCanvas(vpos);
       this.#lastVpos = vpos;
     }
 
-    // コメントレイヤーを合成
-    if (this.#niconiComments) {
+    // バックプレッシャー：エンコーダキューが溢れている場合のみ待機（通常はスキップ）
+    if (this.#encoder.encodeQueueSize > 15) {
+      await this.#waitForEncoder();
+    }
+
+    // drawCanvas 中に bitmapPromise はほぼ完了済み → await は即座に解決
+    const bitmap = await bitmapPromise;
+    videoFrame.close();
+
+    // 動画フレームを描画
+    this.#videoCtx.drawImage(bitmap, 0, 0, this.#width, this.#height);
+    bitmap.close();
+
+    // コメントレイヤーを合成（コメント不在区間では完全スキップ）
+    if (hasComments) {
       this.#videoCtx.drawImage(this.#commentCanvas, 0, 0);
     }
 
     // エンコード（CFR タイムスタンプと固定 duration を使用）
     const composited = new VideoFrame(this.#videoCanvas, {
-      timestamp: cfrTimestamp,
-      duration: cfrIntervalUs,
+      timestamp: this.#frameCount * this.#cfrIntervalUs,
+      duration: this.#cfrIntervalUs,
     });
 
     const keyFrame = this.#frameCount % 120 === 0;
@@ -257,5 +338,6 @@ export class Compositor {
     this.#niconiComments = null;
     this.#videoCanvas = null;
     this.#commentRenderer = null;
+    this.#commentActiveSeconds = null;
   }
 }

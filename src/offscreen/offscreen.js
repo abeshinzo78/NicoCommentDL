@@ -166,7 +166,6 @@ async function startDownload(watchData, preferredQuality, tabId) {
     const videoCodec = h264Supported ? 'avc' : 'vp9';
 
     const resolution = parseResolution(selectedVariant.resolution);
-    let lastVideoTimestamp = -1;
     let lastAudioTimestamp = -1;
     /** @type {number | null} */
     let globalStartTimestamp = null;
@@ -281,6 +280,11 @@ async function startDownload(watchData, preferredQuality, tabId) {
     /** @type {(() => void) | null} */
     let resolveFrameSlot = null;
     const MAX_PENDING_FRAMES = 8;
+
+    // globalStartTimestamp 確定通知（音声の並列処理用）
+    /** @type {(() => void) | null} */
+    let resolveTimestampReady = null;
+    const timestampReadyPromise = new Promise(r => { resolveTimestampReady = r; });
 
     // avcC description から SPS/PPS NALU を抽出（Annex B フォールバック用）
     let spsNalu = null;
@@ -455,6 +459,10 @@ async function startDownload(watchData, preferredQuality, tabId) {
         if (globalStartTimestamp === null) {
           globalStartTimestamp = frame.timestamp;
           compositor.setTimestampOffset(globalStartTimestamp);
+          if (resolveTimestampReady) {
+            resolveTimestampReady();
+            resolveTimestampReady = null;
+          }
         }
         pendingFrameCount++;
         const p = compositor.processFrame(frame).finally(() => {
@@ -485,6 +493,33 @@ async function startDownload(watchData, preferredQuality, tabId) {
 
     let firstChunkLogged = false;
 
+    // 音声処理を並列起動（globalStartTimestamp 確定後にダウンロード+muxer投入開始）
+    const audioPromise = (audioPlaylist) ? (async () => {
+      await timestampReadyPromise;
+
+      await forEachSegment(
+        audioPlaylist.initSegmentUrl,
+        audioPlaylist.segments,
+        async (data, segIndex) => {
+          if (segIndex === 0) return;
+          const audioChunks = extractVideoChunks(data, { timescale: audioTimescale });
+          for (const chunk of audioChunks) {
+            if (!chunk.data || chunk.data.byteLength === 0) continue;
+            let normalizedTimestamp = chunk.timestamp - globalStartTimestamp;
+            if (normalizedTimestamp <= lastAudioTimestamp) normalizedTimestamp = lastAudioTimestamp + 1;
+            lastAudioTimestamp = normalizedTimestamp;
+            muxer.addAudioChunk(new EncodedAudioChunk({
+              type: 'key',
+              timestamp: Math.max(0, normalizedTimestamp),
+              duration: chunk.duration || 0,
+              data: chunk.data,
+            }));
+          }
+        },
+        { initData: audioInitData, concurrency: 6 },
+      );
+    })() : Promise.resolve();
+
     await forEachSegment(
       videoPlaylist.initSegmentUrl,
       videoPlaylist.segments,
@@ -502,7 +537,7 @@ async function startDownload(watchData, preferredQuality, tabId) {
         for (const chunk of chunks) {
           if (!chunk.data || chunk.data.byteLength === 0) continue;
           if (decoderError || videoDecoder.state === 'closed') break;
-          while (videoDecoder.decodeQueueSize > 8) {
+          while (videoDecoder.decodeQueueSize > 16) {
             if (decoderError || videoDecoder.state === 'closed') break;
             await new Promise(resolve => videoDecoder.addEventListener('dequeue', resolve, { once: true }));
           }
@@ -528,7 +563,7 @@ async function startDownload(watchData, preferredQuality, tabId) {
           }));
         }
       },
-      { initData: videoInitData, concurrency: 4 },
+      { initData: videoInitData, concurrency: 6 },
     );
 
     if (decoderError) {
@@ -541,31 +576,8 @@ async function startDownload(watchData, preferredQuality, tabId) {
     await Promise.all(framePromises);
     await compositor.flush();
 
-    if (audioPlaylist) {
-      updateProgress({ stage: 'muxing', message: '音声を結合中...', current: 0, total: audioPlaylist.segments.length, percent: 90 });
-      await forEachSegment(
-        audioPlaylist.initSegmentUrl,
-        audioPlaylist.segments,
-        async (data, segIndex) => {
-          if (segIndex === 0) return;
-          const audioChunks = extractVideoChunks(data, { timescale: audioTimescale });
-          for (const chunk of audioChunks) {
-            if (!chunk.data || chunk.data.byteLength === 0) continue;
-            if (globalStartTimestamp === null) globalStartTimestamp = chunk.timestamp;
-            let normalizedTimestamp = chunk.timestamp - globalStartTimestamp;
-            if (normalizedTimestamp <= lastAudioTimestamp) normalizedTimestamp = lastAudioTimestamp + 1;
-            lastAudioTimestamp = normalizedTimestamp;
-            muxer.addAudioChunk(new EncodedAudioChunk({
-              type: 'key',
-              timestamp: Math.max(0, normalizedTimestamp),
-              duration: chunk.duration || 0,
-              data: chunk.data,
-            }));
-          }
-        },
-        { initData: audioInitData, concurrency: 4 },
-      );
-    }
+    // 音声処理の完了を待つ（動画と並列で進行済み）
+    await audioPromise;
 
     updateProgress({ stage: 'muxing', message: 'ファイルを生成中...', current: 0, total: 1, percent: 95 });
 
