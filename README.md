@@ -9,6 +9,11 @@
 
 > [!NOTE]
 > **Firefox 140+ / Chrome 116+ の両方に対応しています。**
+>
+
+　
+> Firefoxのほうが若干ダウンロード速度が早いです。これを機にFirefoxを使うのもいいでしょう。
+
 
 ## 特徴
 
@@ -48,10 +53,10 @@ Content Script          Background / Offscreen Document
 ページから               HLS Master Playlist 解析
 視聴データ抽出    →      ├── 映像セグメント (並列プリフェッチ)
 Cookie付き              │     ├── AES-128-CBC 復号
-Fetch代理       →      │     ├── fMP4 パース → VideoDecoder
+Fetch代理       →       │     ├── fMP4 パース → VideoDecoder
                        │     ├── createImageBitmap (YUV→RGBA, 色空間変換なし)
 nvComment API          │     ├── niconicomments.drawCanvas(vpos)
-コメント取得     →      │     ├── Canvas2D 合成 (alpha: false)
+コメント取得     →       │     ├── Canvas2D 合成 (alpha: false)
                        │     ├── VideoFrame (alpha: discard)
                        │     ├── VideoEncoder (H.264 SW / VP9 フォールバック)
                        │     └── MP4 Muxer
@@ -59,6 +64,8 @@ nvComment API          │     ├── niconicomments.drawCanvas(vpos)
                        │     └── AAC チャンクを直接 Muxer へ
                        └── MP4 ファイナライズ → ダウンロード
 ```
+
+
 
 ### フレーム合成の詳細 (compositor.js)
 
@@ -150,7 +157,7 @@ HLS セグメント取得  →  VideoDecoder (キュー上限 16)
 | エンコーダ | ソフトウェア優先 (`prefer-software`) |
 | HLS セグメント並列数 | 6 (映像・音声それぞれ) |
 | 暗号化 | AES-128-CBC (HLS EXT-X-KEY) |
-| MP4 Muxer | [mp4-muxer](https://github.com/nicovideo/niconicomments) v5.0.0 (`fastStart: 'in-memory'`) |
+| MP4 Muxer | mp4-muxer v5.0.0 (`fastStart: 'in-memory'`) |
 
 ## 開発
 
