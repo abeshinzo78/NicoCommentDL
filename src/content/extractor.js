@@ -40,7 +40,9 @@
       // media.domand が含まれているパスを優先して探す
       const candidates = [
         parsed?.data?.response,
+        parsed?.data?.response?.data,
         parsed?.data,
+        parsed?.response?.data,
         parsed?.response,
         parsed,
       ];
@@ -56,15 +58,46 @@
     for (const script of document.querySelectorAll('script')) {
       const text = script.textContent || '';
       if (!text.includes('accessRightKey') && !text.includes('domand')) continue;
-      const match = text.match(/\bwindow\.__INITIAL_WATCH_DATA__\s*=\s*({.+?});/s)
-        || text.match(/\bwindow\.__STORE__\s*=\s*({.+?});/s);
+      // 注意: {.+?} (最短マッチ) はネストした {} を正しく取得できないため {.+} (最長マッチ) を使う
+      const match = text.match(/\bwindow\.__INITIAL_WATCH_DATA__\s*=\s*(\{.+\})\s*;?/s)
+        || text.match(/\bwindow\.__STORE__\s*=\s*(\{.+\})\s*;?/s)
+        || text.match(/\bwindow\.__SERVER_DATA__\s*=\s*(\{.+\})\s*;?/s)
+        || text.match(/\bwindow\.__INITIAL_STATE__\s*=\s*(\{.+\})\s*;?/s);
       if (match) {
         try {
           const obj = JSON.parse(match[1]);
-          if (obj?.media?.domand) return obj;
-          if (obj?.data?.response?.media?.domand) return obj.data.response;
+          const candidates = [
+            obj?.data?.response,
+            obj?.data,
+            obj?.response,
+            obj,
+          ];
+          for (const c of candidates) {
+            if (c?.media?.domand) return c;
+          }
         } catch (_) {}
       }
+    }
+
+    // 方法4: <script type="application/json"> タグ（Nuxt / 埋め込みJSONなど）
+    for (const script of document.querySelectorAll('script[type="application/json"]')) {
+      const text = script.textContent || '';
+      if (!text.includes('domand')) continue;
+      try {
+        const obj = JSON.parse(text);
+        const candidates = [
+          obj?.data?.response,
+          obj?.data,
+          obj?.response,
+          obj,
+        ];
+        for (const c of candidates) {
+          if (c?.media?.domand) {
+            console.log('[NicoCommentDL] Watch data found via script[application/json]');
+            return c;
+          }
+        }
+      } catch (_) {}
     }
 
     return null;
@@ -97,10 +130,16 @@
     return { videoInfo, hlsInfo, commentInfo };
   }
 
+  // tryExtract() で一度取得に成功したデータをキャッシュする
+  // Niconico の SPA ハイドレーションで DOM が書き換わった後でも返せるようにする
+  /** @type {ReturnType<typeof extractWatchData> | null} */
+  let cachedWatchData = null;
+
   // Background scriptからのリクエストをリッスン
   browser.runtime.onMessage.addListener((message, _sender, sendResponse) => {
     if (message.type === 'EXTRACT_WATCH_DATA') {
-      const data = extractWatchData();
+      // キャッシュがあればそれを返す（DOM が SPA に書き換えられた後でも対応）
+      const data = cachedWatchData || extractWatchData();
       sendResponse(data);
       return false;
     }
@@ -136,6 +175,7 @@
       if (delays[i] > 0) await new Promise(r => setTimeout(r, delays[i]));
       const data = extractWatchData(true); // 自動リトライ中は警告を抑制
       if (data) {
+        cachedWatchData = data; // DOM が後で書き換えられても返せるようキャッシュ
         browser.runtime.sendMessage({ type: 'WATCH_DATA_READY', data }).catch(() => {});
         return;
       }

@@ -521,6 +521,14 @@ browser.runtime.onMessage.addListener((message, sender, sendResponse) => {
           if (wd) {
             tabData.set(tabId, wd);
             startDownload(wd, data?.preferredQuality, tabId);
+          } else {
+            updateProgress({
+              stage: 'error',
+              message: 'ページからデータを取得できませんでした。ページを再読み込みしてから再試行してください。',
+              current: 0,
+              total: 0,
+              percent: 0,
+            });
           }
         });
       } else {

@@ -118,6 +118,7 @@ export async function fetchComments(nvComment, options = {}) {
       'x-frontend-id': '6',
       'x-frontend-version': '0',
     },
+    credentials: 'omit',
     body: JSON.stringify({
       params,
       threadKey,
@@ -126,7 +127,9 @@ export async function fetchComments(nvComment, options = {}) {
   });
 
   if (!response.ok) {
-    throw new Error(`Comment API failed: ${response.status} ${response.statusText}`);
+    let body = '';
+    try { body = JSON.stringify(await response.json()); } catch (_) {}
+    throw new Error(`Comment API failed: ${response.status} ${response.statusText} ${body}`);
   }
 
   const json = await response.json();
