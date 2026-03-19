@@ -250,12 +250,16 @@ async function startDownload(watchData, preferredQuality, tabId) {
       audioDescription,
     });
 
-    // メモリ節約のためビットレートは控えめに設定（出力バッファを小さく）
-    const autoBitrate = width >= 1920 ? 4_000_000
-      : width >= 1280 ? 2_500_000
-      : width >= 854 ? 1_800_000
-      : width >= 640 ? 1_200_000
-      : 800_000;
+    // ビットレート: 高品質再エンコード用（メモリには影響しない — チャンクは即座に muxer へ渡る）
+    // 解像度ベース × フレームレートスケール（30fps基準、最大1.5倍）
+    const framerateScale = Math.min(framerate / 30, 1.5);
+    const autoBitrate = Math.round((
+      width >= 1920 ? 16_000_000
+      : width >= 1280 ? 7_500_000
+      : width >= 854 ? 4_500_000
+      : width >= 640 ? 3_000_000
+      : 1_200_000
+    ) * framerateScale);
 
     // CFR 用フレームカウンタ：エンコーダ出力の timestamp/duration を無視し、
     // フレーム番号から均一なタイミングを算出して muxer に渡す

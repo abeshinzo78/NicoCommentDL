@@ -52,26 +52,16 @@ export function createVP9EncoderConfig(width, height, bitrate = 5_000_000, frame
  * @returns {VideoEncoderConfig}
  */
 export function createFirefoxCompatibleEncoderConfig(width, height, bitrate = 5_000_000, framerate = 30, useVP9 = false) {
-  if (useVP9) {
-    return {
-      codec: 'vp09.00.31.08',
-      width,
-      height,
-      bitrate,
-      framerate,
-      hardwareAcceleration: 'prefer-hardware',
-      latencyMode: 'realtime',
-    };
-  }
-
+  const codec = useVP9 ? 'vp09.00.31.08' : 'avc1.640028'; // H.264 High Profile Level 4.0
   return {
-    codec: 'avc1.42E01F', // H.264 Main Profile Level 3.1
+    codec,
     width,
     height,
-    bitrate,
+    bitrate,              // quantizer 未対応時のフォールバック用
+    bitrateMode: 'quantizer', // CRF相当: フレーム単位で品質一定、ビット不足によるブロックノイズを構造的に排除
     framerate,
-    hardwareAcceleration: 'prefer-hardware',
-    latencyMode: 'realtime',
+    hardwareAcceleration: 'prefer-software', // SW エンコーダは QP 制御が正確 + Chrome Offscreen の GPU 制限を回避
+    latencyMode: 'realtime',  // 品質は QP が保証するのでレート制御は高速でよい
   };
 }
 
@@ -110,49 +100,71 @@ export function createEncoder(config, onChunk) {
  * @param {VideoEncoderConfig} primaryConfig
  * @param {VideoEncoderConfig} fallbackConfig
  * @param {(chunk: EncodedVideoChunk, meta?: EncodedVideoChunkMetadata) => void} onChunk
- * @returns {Promise<{ encoder: VideoEncoder, usedFallback: boolean }>}
+ * @returns {Promise<{ encoder: VideoEncoder, usedFallback: boolean, config: VideoEncoderConfig }>}
  */
 export async function createEncoderWithFallback(primaryConfig, fallbackConfig, onChunk) {
   // configure() は非同期エラーになるため、isConfigSupported の結果に基づいて
   // 実際に configure() に渡す設定を決める（サポート外設定で configure() しない）
-  function toBasicConfig(config) {
-    return { codec: config.codec, width: config.width, height: config.height, bitrate: config.bitrate, framerate: config.framerate };
-  }
 
   /**
+   * 段階的フォールバック：品質に最も効くオプションを優先して残す
+   * quantizer > VBR+quality > VBR > basic の順で試行
    * @param {VideoEncoderConfig} config
    * @returns {Promise<VideoEncoderConfig | null>} サポートされる設定、なければ null
    */
   async function findSupportedConfig(config) {
-    // まずフル設定（hints 含む）でチェック
-    const fullCheck = await VideoEncoder.isConfigSupported(config);
-    if (fullCheck.supported === true) {
-      console.log(`[VideoEncoder] Full config supported: ${config.codec}`);
-      return config;
-    }
-    // ダメなら基本設定のみでチェック
-    const basic = toBasicConfig(config);
-    const basicCheck = await VideoEncoder.isConfigSupported(basic);
-    if (basicCheck.supported === true) {
-      console.log(`[VideoEncoder] Basic config supported: ${config.codec}`);
-      return basic;
+    const { codec, width, height, bitrate, framerate } = config;
+
+    /** @type {Array<[string, VideoEncoderConfig]>} */
+    const candidates = [
+      // 1. Quantizer + SW（QP 精度最高、CPU→GPU 転送なし）
+      ['quantizer+sw', { codec, width, height, framerate, bitrateMode: 'quantizer', latencyMode: 'realtime', hardwareAcceleration: 'prefer-software' }],
+      // 2. Quantizer のみ（ブラウザが HW/SW を選択）
+      ['quantizer', { codec, width, height, framerate, bitrateMode: 'quantizer', latencyMode: 'realtime' }],
+      // 3. VBR + SW + quality（ビットレート制御、品質重視）
+      ['vbr+sw+quality', { codec, width, height, bitrate, framerate, bitrateMode: 'variable', latencyMode: 'quality', hardwareAcceleration: 'prefer-software' }],
+      // 4. VBR のみ
+      ['vbr', { codec, width, height, bitrate, framerate, bitrateMode: 'variable' }],
+      // 5. 最小設定（ブラウザデフォルト）
+      ['basic', { codec, width, height, bitrate, framerate }],
+    ];
+
+    for (const [label, candidate] of candidates) {
+      const check = await VideoEncoder.isConfigSupported(candidate);
+      if (check.supported === true) {
+        console.log(`[VideoEncoder] ${label} config supported: ${codec}`, Object.keys(candidate).join(', '));
+        return candidate;
+      }
     }
     return null;
   }
 
-  const primarySupported = await findSupportedConfig(primaryConfig);
-  if (primarySupported) {
-    const encoder = createEncoder(primarySupported, onChunk);
-    return { encoder, usedFallback: false };
+  // H.264: High Profile → Main Profile → Baseline Profile の順で試行
+  // Firefox の OpenH264 は High/Main 非対応だが Baseline は対応している
+  const h264Profiles = [
+    primaryConfig.codec,   // avc1.640028 (High Profile L4.0)
+    'avc1.4D4028',         // Main Profile L4.0
+    'avc1.42E028',         // Constrained Baseline L4.0
+    'avc1.42001f',         // Baseline L3.1（最も互換性が高い）
+  ];
+
+  for (const codec of h264Profiles) {
+    const config = await findSupportedConfig({ ...primaryConfig, codec });
+    if (config) {
+      const encoder = createEncoder(config, onChunk);
+      console.log(`[VideoEncoder] Using H.264 profile: ${codec}`);
+      return { encoder, usedFallback: false, config };
+    }
   }
 
+  // VP9 フォールバック（H.264 が全プロファイルで非対応の場合のみ）
   const fallbackSupported = await findSupportedConfig(fallbackConfig);
   if (fallbackSupported) {
     const encoder = createEncoder(fallbackSupported, onChunk);
-    return { encoder, usedFallback: true };
+    return { encoder, usedFallback: true, config: fallbackSupported };
   }
 
-  throw new Error('Neither primary nor fallback codec is supported');
+  throw new Error('Neither H.264 nor VP9 codec is supported');
 }
 
 /**

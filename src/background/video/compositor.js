@@ -61,6 +61,10 @@ export class Compositor {
    * @type {Uint8Array | null}
    */
   #commentActiveSeconds = null;
+  /** @type {boolean} quantizer モードが有効か（encode() に QP を渡すか） */
+  #useQuantizer = false;
+  /** @type {boolean} VP9 コーデックか（encode options のキーが異なる） */
+  #isVP9 = false;
   /**
    * フレーム処理のシリアル化チェーン
    * createImageBitmap は並列実行するが、canvas 書き込み〜encode は必ず 1 フレームずつ順番に行う
@@ -83,7 +87,7 @@ export class Compositor {
 
     // 動画フレーム描画用キャンバス（最終出力サイズ）
     this.#videoCanvas = new OffscreenCanvas(width, height);
-    const ctx = this.#videoCanvas.getContext('2d');
+    const ctx = this.#videoCanvas.getContext('2d', { alpha: false });
     if (!ctx) throw new Error('Failed to get 2D context for video canvas');
     this.#videoCtx = ctx;
 
@@ -186,9 +190,11 @@ export class Compositor {
     const primaryConfig = createFirefoxCompatibleEncoderConfig(width, height, bitrate, framerate, false);
     const fallbackConfig = createFirefoxCompatibleEncoderConfig(width, height, bitrate, framerate, true);
 
-    const { encoder, usedFallback } = await createEncoderWithFallback(primaryConfig, fallbackConfig, onEncodedChunk);
+    const { encoder, usedFallback, config: encoderConfig } = await createEncoderWithFallback(primaryConfig, fallbackConfig, onEncodedChunk);
     this.#encoder = encoder;
-    console.log(`[Compositor] Encoder initialized with ${usedFallback ? 'VP9 (fallback)' : 'H.264'}`);
+    this.#useQuantizer = encoderConfig.bitrateMode === 'quantizer';
+    this.#isVP9 = encoderConfig.codec.startsWith('vp');
+    console.log(`[Compositor] Encoder: ${usedFallback ? 'VP9 (fallback)' : 'H.264'}, mode: ${encoderConfig.bitrateMode || 'default'}`);
   }
 
   /**
@@ -248,7 +254,9 @@ export class Compositor {
     }
 
     // createImageBitmap は今すぐ開始（前フレームの処理を待たず並列変換）
-    const bitmapPromise = createImageBitmap(videoFrame);
+    // colorSpaceConversion: 'none' — YUV→sRGB 変換を省略し丸め誤差を排除（すぐ YUV に戻すため不要）
+    // premultiplyAlpha: 'none' — 完全不透明フレームへの不要なアルファ乗算を省略
+    const bitmapPromise = createImageBitmap(videoFrame, { colorSpaceConversion: 'none', premultiplyAlpha: 'none' });
     // videoFrame のタイムスタンプは close() 前に取り出しておく
     const rawTimestamp = videoFrame.timestamp;
 
@@ -299,13 +307,22 @@ export class Compositor {
     }
 
     // エンコード（CFR タイムスタンプと固定 duration を使用）
+    // alpha: 'discard' — アルファプレーン不要を明示し RGBA→I420 変換を最適化
     const composited = new VideoFrame(this.#videoCanvas, {
       timestamp: this.#frameCount * this.#cfrIntervalUs,
       duration: this.#cfrIntervalUs,
+      alpha: 'discard',
     });
 
-    const keyFrame = this.#frameCount % 120 === 0;
-    this.#encoder.encode(composited, { keyFrame });
+    const keyFrame = this.#frameCount % Math.round(this.#framerate * 2) === 0;
+    // quantizer モード: フレーム単位で QP を指定（低いほど高品質）
+    // H.264 QP 10 / VP9 QP 12 — ほぼロスレス、最高品質
+    const encodeOptions = this.#useQuantizer
+      ? (this.#isVP9
+        ? { keyFrame, vp9: { quantizer: 12 } }
+        : { keyFrame, avc: { quantizer: 10 } })
+      : { keyFrame };
+    this.#encoder.encode(composited, encodeOptions);
     composited.close();
 
     this.#frameCount++;

@@ -15,7 +15,8 @@
 - **公式互換のコメント描画** — niconicomments が `ue`/`shita`/`big`/`small`/色コマンド等を含むニコニコ公式プレイヤーの描画ロジックを再現
 - **ストリーミング処理** — HLS セグメントを逐次ダウンロード・デコード・合成・エンコードするパイプライン設計で、動画全体をメモリに載せない
 - **CFR 出力** — フレーム番号ベースの固定フレームレートタイムスタンプにより、VFR 起因の音ズレや再生互換問題を回避
-- **解像度自動適応** — ビットレートを解像度に応じて自動設定（1080p: 4Mbps / 720p: 2.5Mbps / 480p: 1.8Mbps / 360p: 1.2Mbps）
+- **高品質エンコード** — ソフトウェアエンコーダによる高精度なビットレート制御、不要な色空間変換・アルファ処理の排除で再エンコード劣化を最小化
+- **解像度・フレームレート適応ビットレート** — 解像度とフレームレートに応じてビットレートを自動設定（1080p30: 16Mbps / 720p30: 7.5Mbps / 480p30: 4.5Mbps）
 - **音声並列処理** — 映像エンコードと音声セグメントのダウンロード・mux を並列実行し、待ち時間を削減
 
 ## 実際にダウンロードしたもの
@@ -48,10 +49,11 @@ Content Script          Background / Offscreen Document
 視聴データ抽出    →      ├── 映像セグメント (並列プリフェッチ)
 Cookie付き              │     ├── AES-128-CBC 復号
 Fetch代理       →      │     ├── fMP4 パース → VideoDecoder
-                       │     ├── createImageBitmap (YUV→RGBA)
+                       │     ├── createImageBitmap (YUV→RGBA, 色空間変換なし)
 nvComment API          │     ├── niconicomments.drawCanvas(vpos)
-コメント取得     →      │     ├── Canvas2D 合成
-                       │     ├── VideoEncoder (H.264/VP9)
+コメント取得     →      │     ├── Canvas2D 合成 (alpha: false)
+                       │     ├── VideoFrame (alpha: discard)
+                       │     ├── VideoEncoder (H.264 SW / VP9 フォールバック)
                        │     └── MP4 Muxer
                        ├── 音声セグメント (映像と並列)
                        │     └── AAC チャンクを直接 Muxer へ
@@ -62,7 +64,9 @@ nvComment API          │     ├── niconicomments.drawCanvas(vpos)
 
 ```
 processFrame(videoFrame)
-  ├── createImageBitmap(videoFrame)    ← ブラウザスレッドで YUV→RGBA 変換
+  ├── createImageBitmap(videoFrame,     ← ブラウザスレッドで YUV→RGBA 変換
+  │     { colorSpaceConversion: 'none',    色空間変換を省略し丸め誤差を排除
+  │       premultiplyAlpha: 'none' })      不要なアルファ乗算を省略
   │
   └── #processingChain (シリアル化キュー)
         └── #encodeFrame()
@@ -71,10 +75,23 @@ processFrame(videoFrame)
               2. await bitmapPromise
               3. ctx.drawImage(bitmap)            ← 動画フレーム
               4. ctx.drawImage(commentCanvas)     ← コメントレイヤー合成
-              5. new VideoFrame → encoder.encode() → Muxer
+              5. new VideoFrame(canvas, { alpha: 'discard' })
+              6. encoder.encode(frame)            ← SW エンコーダ
 ```
 
 `drawCanvas()` の同期実行中に `createImageBitmap` がブラウザスレッドで並列完了するため、bitmap の await は即座に解決します。
+
+### 品質最適化
+
+| 最適化 | 効果 |
+|---|---|
+| Canvas `alpha: false` | アルファチャンネル処理を排除、メモリ 25% 削減 |
+| `colorSpaceConversion: 'none'` | YUV→sRGB→YUV の二重変換による丸め誤差を排除 |
+| `premultiplyAlpha: 'none'` | 不透明フレームへの不要なアルファ乗算を省略 |
+| VideoFrame `alpha: 'discard'` | RGBA→I420 変換の最適パスを使用 |
+| ソフトウェアエンコーダ | ハードウェアエンコーダより正確なビットレート制御 |
+| H.264 High Profile (対応時) | CABAC + 8x8 DCT で同ビットレートでの圧縮効率向上 |
+| 2秒キーフレーム間隔 | P/B フレームの誤差蓄積を抑制 |
 
 ### コメント不在区間の最適化
 
@@ -92,6 +109,24 @@ HLS セグメント取得  →  VideoDecoder (キュー上限 16)
 
 各段にキュー上限を設け、溜まりすぎた場合は上流を一時停止します。これにより長時間動画でもメモリ使用量が一定に保たれます。
 
+### エンコーダ設定フォールバック
+
+ブラウザの対応状況に応じて最適なエンコーダ設定を自動選択します。
+
+**H.264 プロファイル** (上から順に試行):
+1. `avc1.640028` — High Profile Level 4.0
+2. `avc1.4D4028` — Main Profile Level 4.0
+3. `avc1.42E028` — Constrained Baseline Level 4.0
+4. `avc1.42001f` — Baseline Level 3.1
+5. VP9 フォールバック (全 H.264 プロファイル非対応時)
+
+**エンコーダオプション** (各プロファイルで上から順に試行):
+1. Quantizer + ソフトウェアエンコーダ (QP 制御、最高品質)
+2. Quantizer のみ
+3. VBR + ソフトウェアエンコーダ + quality モード
+4. VBR のみ
+5. 基本設定 (codec + 解像度 + ビットレート + フレームレート)
+
 ### Firefox / Chrome の違い
 
 | | Firefox (MV2) | Chrome (MV3) |
@@ -100,7 +135,7 @@ HLS セグメント取得  →  VideoDecoder (キュー上限 16)
 | WebCodecs 実行場所 | Background Event Page | Offscreen Document |
 | ルーティング | background/main.js が全処理 | Service Worker → Offscreen Document に委譲 |
 | SW keepalive | 不要 | `chrome.alarms` で30秒タイムアウト回避 |
-| エンコーダ | H.264 Main Profile → VP9 フォールバック | H.264 Baseline → VP9 フォールバック |
+| エンコーダ | H.264 (High → Baseline 自動選択) → VP9 | H.264 High Profile → VP9 |
 
 ## 仕様
 
@@ -110,7 +145,9 @@ HLS セグメント取得  →  VideoDecoder (キュー上限 16)
 | 出力形式 | MP4 (H.264 + AAC / VP9 + AAC) |
 | コメント描画 | [niconicomments](https://github.com/xpadev-net/niconicomments) v0.2.76 |
 | フレームレート | ソース動画に合わせた CFR (通常 30fps) |
-| キーフレーム間隔 | 120 フレーム (30fps で 4秒) |
+| ビットレート | 解像度 × フレームレート連動 (720p30: 7.5Mbps / 1080p60: 24Mbps) |
+| キーフレーム間隔 | フレームレート × 2 (常に 2秒固定) |
+| エンコーダ | ソフトウェア優先 (`prefer-software`) |
 | HLS セグメント並列数 | 6 (映像・音声それぞれ) |
 | 暗号化 | AES-128-CBC (HLS EXT-X-KEY) |
 | MP4 Muxer | [mp4-muxer](https://github.com/nicovideo/niconicomments) v5.0.0 (`fastStart: 'in-memory'`) |
