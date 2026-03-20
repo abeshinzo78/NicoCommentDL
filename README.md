@@ -43,6 +43,12 @@ https://github.com/user-attachments/assets/ac07223a-1949-4e3e-9f3f-bd6026d50a83
 2. 拡張機能アイコンをクリック
 3. 画質を選択してダウンロード開始
 
+
+ <span style="color: yellow;">注意</span>
+> 
+> **ログインしていないと使えません**
+>
+
 ## アーキテクチャ
 
 ### 処理パイプライン
